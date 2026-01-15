@@ -33,9 +33,29 @@ export const useThreatSimulation = (
   const [realDataError, setRealDataError] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
 
-  // Check if real data APIs are available
-  const apiStatus = getAPIStatus();
-  const hasRealDataAPIs = isRealDataAvailable();
+  // API status - check via API endpoint (env vars aren't available in browser)
+  const [apiStatus, setApiStatus] = useState<{ abuseipdb: boolean; otx: boolean }>({ abuseipdb: false, otx: false });
+  const [hasRealDataAPIs, setHasRealDataAPIs] = useState(false);
+  const apiStatusChecked = useRef(false);
+
+  // Check API status on mount via the API endpoint
+  useEffect(() => {
+    if (apiStatusChecked.current) return;
+    apiStatusChecked.current = true;
+
+    const checkApiStatus = async () => {
+      try {
+        const status = await apiClient.getAPIStatus();
+        setApiStatus({ abuseipdb: status.abuseipdb, otx: status.otx });
+        setHasRealDataAPIs(status.abuseipdb || status.otx);
+      } catch {
+        // Fallback to local check if API unavailable
+        setApiStatus(getAPIStatus());
+        setHasRealDataAPIs(isRealDataAvailable());
+      }
+    };
+    checkApiStatus();
+  }, []);
 
   // Initialize History - load from IndexedDB if persistence enabled
   useEffect(() => {
