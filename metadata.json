@@ -1,0 +1,5 @@
+{
+  "name": "SentinelVis - Threat Map",
+  "description": "A real-time cybersecurity threat intelligence dashboard visualizing network traffic and potential DDoS patterns on an interactive 3D globe. Includes AI-powered threat analysis.",
+  "requestFramePermissions": []
+}
