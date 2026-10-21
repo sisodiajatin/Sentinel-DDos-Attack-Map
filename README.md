@@ -6,6 +6,12 @@ A sophisticated real-time cybersecurity threat visualization platform that maps 
 
 [Live Demo](https://sentinel-d-dos-attack-map.vercel.app) • [Report Bug](https://github.com/sisodiajatin/Sentinel-DDos-Attack-Map/issues) • [Request Feature](https://github.com/sisodiajatin/Sentinel-DDos-Attack-Map/issues)
 
+<a href="docs/media/sentinelvis-launch.mp4">
+  <img src="docs/media/sentinelvis-preview.gif" alt="SentinelVis demo: attacks arcing across the 3D globe, threat feed, Gemini analysis and replay mode" width="100%">
+</a>
+
+▶ [Watch the full launch video with sound](docs/media/sentinelvis-launch.mp4)
+
 </div>
 
 ---
