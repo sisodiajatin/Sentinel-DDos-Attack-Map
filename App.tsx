@@ -29,18 +29,19 @@ const App: React.FC = () => {
 
   // Replay mode hook
   const replay = useReplayMode();
+  const { isReplaying, refreshTimeRange } = replay;
 
   // Periodically refresh replay time range to keep counts current
   useEffect(() => {
     // Refresh on mount and every 30 seconds
-    replay.refreshTimeRange();
+    refreshTimeRange();
     const interval = setInterval(() => {
-      if (!replay.isReplaying) {
-        replay.refreshTimeRange();
+      if (!isReplaying) {
+        refreshTimeRange();
       }
     }, 30000);
     return () => clearInterval(interval);
-  }, [replay.isReplaying, replay.refreshTimeRange]);
+  }, [isReplaying, refreshTimeRange]);
 
   // UI State
   const [selectedAttack, setSelectedAttack] = useState<AttackEvent | null>(null);

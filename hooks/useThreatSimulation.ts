@@ -57,18 +57,24 @@ export const useThreatSimulation = (
     checkApiStatus();
   }, []);
 
-  // Initialize History - load from IndexedDB if persistence enabled
+  // Initialize history once on mount: restore from IndexedDB, else generate.
+  // Deliberately independent of dataSource, so switching sources does not
+  // reload the cache or tear down the replay history service.
   useEffect(() => {
-    const initHistory = async () => {
-      // Initialize attack history service for replay mode
-      await attackHistoryService.init();
+    let cancelled = false;
 
-      // Try to load from IndexedDB first if persistence is enabled
+    const initHistory = async () => {
+      try {
+        await attackHistoryService.init();
+      } catch (error) {
+        console.warn('Failed to init attack history:', error);
+      }
+
       if (persistHistory) {
         try {
           await localDB.init();
           const storedAttacks = await localDB.getRecentAttacks(maxHistory);
-
+          if (cancelled) return;
           if (storedAttacks.length > 0) {
             setAttacks(storedAttacks);
             setIsInitialized(true);
@@ -79,50 +85,60 @@ export const useThreatSimulation = (
         }
       }
 
-      // No stored data - generate fresh
-      if (dataSource === 'real' && hasRealDataAPIs) {
-        setIsLoadingRealData(true);
-        try {
-          // Try API proxy first
-          const streamResponse = await apiClient.getThreatStream(initialCount);
-          if (streamResponse.attacks.length > 0) {
-            setAttacks(streamResponse.attacks);
-            if (persistHistory) {
-              await localDB.saveAttacks(streamResponse.attacks);
-            }
-            setRealDataError(null);
-          } else {
-            // Fallback to local threat intel
-            const realAttacks = await fetchRealThreatData();
-            if (realAttacks.length > 0) {
-              setAttacks(realAttacks.slice(0, initialCount));
-              setRealDataError(null);
-            } else {
-              setAttacks(generateHistory(initialCount));
-              setRealDataError('No real threat data available, using simulation');
-            }
-          }
-        } catch (error) {
-          console.error('Failed to fetch real threat data:', error);
-          setAttacks(generateHistory(initialCount));
-          setRealDataError('Failed to fetch real data, using simulation');
-        } finally {
-          setIsLoadingRealData(false);
-        }
-      } else {
-        setAttacks(generateHistory(initialCount));
-      }
-
+      if (cancelled) return;
+      setAttacks(generateHistory(initialCount));
       setIsInitialized(true);
     };
 
     initHistory();
 
-    // Cleanup attack history service on unmount
     return () => {
+      cancelled = true;
       attackHistoryService.dispose();
     };
-  }, [initialCount, dataSource, hasRealDataAPIs, maxHistory, persistHistory]);
+  }, [initialCount, maxHistory, persistHistory]);
+
+  // When the user switches to a live source, pull a fresh batch from the
+  // server-side stream (falls back to curated local intel, then simulation).
+  useEffect(() => {
+    if (!isInitialized) return;
+    if (dataSource === 'simulation' || !hasRealDataAPIs) return;
+
+    let cancelled = false;
+
+    const loadLiveBatch = async () => {
+      setIsLoadingRealData(true);
+      try {
+        const streamResponse = await apiClient.getThreatStream(initialCount);
+        let batch = streamResponse.attacks;
+        if (batch.length === 0) {
+          batch = (await fetchRealThreatData()).slice(0, initialCount);
+        }
+        if (cancelled) return;
+
+        if (batch.length > 0) {
+          setAttacks((prev) => [...prev, ...batch].slice(-maxHistory));
+          if (persistHistory) {
+            await localDB.saveAttacks(batch).catch((e) => console.warn('Failed to persist batch:', e));
+          }
+          await attackHistoryService.saveAttacks(batch).catch((e) => console.warn('Failed to save batch to history:', e));
+          setRealDataError(null);
+        } else {
+          setRealDataError('No real threat data available, using simulation');
+        }
+      } catch (error) {
+        console.error('Failed to fetch real threat data:', error);
+        if (!cancelled) setRealDataError('Failed to fetch real data, using simulation');
+      } finally {
+        if (!cancelled) setIsLoadingRealData(false);
+      }
+    };
+
+    loadLiveBatch();
+    return () => {
+      cancelled = true;
+    };
+  }, [dataSource, hasRealDataAPIs, isInitialized, initialCount, maxHistory, persistHistory]);
 
   // Save new attacks to IndexedDB
   const addAttack = useCallback(async (attack: AttackEvent) => {
@@ -165,9 +181,9 @@ export const useThreatSimulation = (
 
     return () => {
       unsubscribe();
-      if (dataSource === 'real') {
-        threatIntelStream.stop();
-      }
+      // Always stop: previously hybrid mode left the stream's interval and
+      // periodic refetches running after switching away.
+      threatIntelStream.stop();
     };
   }, [dataSource, isPaused, hasRealDataAPIs, addAttack]);
 
@@ -196,6 +212,12 @@ export const useThreatSimulation = (
       } catch (error) {
         console.warn('Failed to clear IndexedDB:', error);
       }
+    }
+    // Also clear the replay timeline, otherwise replay keeps showing old data.
+    try {
+      await attackHistoryService.clear();
+    } catch (error) {
+      console.warn('Failed to clear attack history:', error);
     }
   }, [persistHistory]);
 

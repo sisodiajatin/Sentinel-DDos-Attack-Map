@@ -1,9 +1,18 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { GoogleGenAI } from '@google/genai';
+import { isValidIp, rateLimit } from '../_lib/http.js';
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 
-interface AttackEvent {
+const ATTACK_TYPES = new Set([
+  'SYN Flood',
+  'UDP Flood',
+  'HTTP Flood',
+  'DNS Amplification',
+  'SQL Injection',
+]);
+
+export interface SanitizedAttack {
   ip: string;
   source: { city: string; country: string };
   target: { city: string; country: string };
@@ -12,20 +21,70 @@ interface AttackEvent {
   timestamp: number;
 }
 
+/**
+ * Keep only letters, digits, spaces and a few punctuation marks, capped in
+ * length. Request fields are interpolated into the LLM prompt, so free text
+ * must not be able to carry instructions.
+ */
+function cleanText(value: unknown, max = 60): string | null {
+  if (typeof value !== 'string') return null;
+  const cleaned = value.replace(/[^\p{L}\p{N} .,'()-]/gu, '').trim().slice(0, max);
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+/** Validate the untrusted request body. Returns null when it is not acceptable. */
+export function sanitizeAttack(body: unknown): SanitizedAttack | null {
+  if (!body || typeof body !== 'object') return null;
+  const b = body as Record<string, unknown>;
+  const src = (b.source ?? {}) as Record<string, unknown>;
+  const tgt = (b.target ?? {}) as Record<string, unknown>;
+
+  const type = typeof b.type === 'string' && ATTACK_TYPES.has(b.type) ? b.type : null;
+  const ip = typeof b.ip === 'string' && isValidIp(b.ip) ? b.ip : null;
+  const magnitude = typeof b.magnitude === 'number' && Number.isFinite(b.magnitude)
+    ? Math.min(10, Math.max(1, Math.round(b.magnitude)))
+    : null;
+  const timestamp = typeof b.timestamp === 'number' && Number.isFinite(b.timestamp)
+    && !Number.isNaN(new Date(b.timestamp).getTime())
+    ? b.timestamp
+    : Date.now();
+
+  const sourceCity = cleanText(src.city);
+  const sourceCountry = cleanText(src.country);
+  const targetCity = cleanText(tgt.city);
+  const targetCountry = cleanText(tgt.country);
+
+  if (!type || !ip || magnitude === null || !sourceCity || !sourceCountry || !targetCity || !targetCountry) {
+    return null;
+  }
+
+  return {
+    ip,
+    type,
+    magnitude,
+    timestamp,
+    source: { city: sourceCity, country: sourceCountry },
+    target: { city: targetCity, country: targetCountry },
+  };
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Only allow POST requests
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  // Each call spends Gemini quota; keep this tight.
+  if (!rateLimit(req, res, 'analyze', 10, 60_000)) return;
+
   if (!GEMINI_API_KEY) {
     return res.status(500).json({ error: 'Gemini API key not configured' });
   }
 
-  const attack = req.body as AttackEvent;
+  const attack = sanitizeAttack(req.body);
 
-  if (!attack || !attack.type) {
-    return res.status(400).json({ error: 'Attack data required' });
+  if (!attack) {
+    return res.status(400).json({ error: 'Invalid attack data' });
   }
 
   try {

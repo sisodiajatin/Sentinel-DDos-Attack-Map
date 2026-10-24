@@ -25,11 +25,6 @@ export interface NewsItem {
  * that isn't easily proxied. Consider adding a dedicated API route for this.
  */
 export const fetchRealTimeThreatNews = async (): Promise<NewsItem> => {
-  const fallbackNews = {
-    summary: "System Alert: Global threat levels elevated due to increase in automated botnet activity targeting IoT devices.",
-    sources: []
-  };
-
   // For now, return simulated news
   // A future enhancement could add /api/ai/news route
   const headlines = [

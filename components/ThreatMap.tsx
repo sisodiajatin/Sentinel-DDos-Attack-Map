@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import * as d3 from 'd3';
 import { feature } from 'topojson-client';
 import { AttackEvent, AttackType, MapViewMode, CountryLabel, LocationCount } from '../types';
@@ -70,6 +70,43 @@ const COUNTRY_NAME_TO_CODE: Record<string, string> = {
   'Argentina': 'AR', 'Egypt': 'EG', 'Nigeria': 'NG', 'Singapore': 'SG',
   'Netherlands': 'NL', 'Sweden': 'SE', 'Poland': 'PL', 'Ukraine': 'UA', 'Vietnam': 'VN',
 };
+
+const WORLD_ATLAS_URL = 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json';
+
+type CountryFeature = GeoJSON.Feature<GeoJSON.Geometry, Record<string, unknown>>;
+type CountryCollection = GeoJSON.FeatureCollection<GeoJSON.Geometry, Record<string, unknown>>;
+
+// Shared across mounts so remounting the map (e.g. view switches) doesn't refetch.
+let worldAtlasPromise: Promise<CountryCollection> | null = null;
+
+function loadWorldAtlas(): Promise<CountryCollection> {
+  if (!worldAtlasPromise) {
+    worldAtlasPromise = fetch(WORLD_ATLAS_URL)
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`Failed to load map data: ${response.status}`);
+        }
+        return response.json() as Promise<WorldTopology>;
+      })
+      .then((data) => {
+        // @ts-expect-error - topojson types are tricky with the client library
+        return feature(data, data.objects.countries) as CountryCollection;
+      })
+      .catch((error) => {
+        worldAtlasPromise = null; // allow retry after a failure
+        throw error;
+      });
+  }
+  return worldAtlasPromise;
+}
+
+function buildCountryLabels(features: CountryCollection): CountryLabel[] {
+  return features.features.flatMap((f: CountryFeature) => {
+    const id = String(f.id);
+    const name = COUNTRY_NAMES[id];
+    return name ? [{ id, name, centroid: d3.geoCentroid(f) }] : [];
+  });
+}
 
 const ThreatMap: React.FC<ThreatMapProps> = ({ attacks, selectedType, onTypeChange, onAnalyze, isDark, viewMode, mode = 'live', replayTimestamp }) => {
   const isReplayMode = mode === 'replay';
@@ -143,43 +180,31 @@ const ThreatMap: React.FC<ThreatMapProps> = ({ attacks, selectedType, onTypeChan
   }, []);
 
   // Load TopoJSON data and prepare labels
-  useEffect(() => {
+  const loadMap = useCallback((isCancelled: () => boolean = () => false) => {
     setIsLoading(true);
     setLoadError(null);
-    
-    fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json')
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error(`Failed to load map data: ${response.status}`);
-        }
-        return response.json();
-      })
-      .then((data: WorldTopology) => {
-        // @ts-expect-error - topojson types are tricky with the client library
-        const features = feature(data, data.objects.countries);
+    loadWorldAtlas()
+      .then((features) => {
+        if (isCancelled()) return;
         setWorldData(features);
-        
-        // Pre-calculate centroids for labels
-        const labels = (features as any).features
-            .map((f: any) => {
-                const name = COUNTRY_NAMES[f.id];
-                if (!name) return null;
-                return {
-                    id: f.id,
-                    name: name,
-                    centroid: d3.geoCentroid(f)
-                };
-            })
-            .filter((l: any) => l !== null);
-        setCountryLabels(labels);
+        setCountryLabels(buildCountryLabels(features));
         setIsLoading(false);
       })
-      .catch((error) => {
+      .catch((error: Error) => {
+        if (isCancelled()) return;
         console.error('Failed to load world map data:', error);
         setLoadError(error.message || 'Failed to load map data');
         setIsLoading(false);
       });
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadMap(() => cancelled);
+    return () => {
+      cancelled = true;
+    };
+  }, [loadMap]);
 
   // Initialize scale based on container size
   useEffect(() => {
@@ -952,45 +977,10 @@ const ThreatMap: React.FC<ThreatMapProps> = ({ attacks, selectedType, onTypeChan
 
     });
 
-  }, [worldData, countryLabels, rotation, scale, attacks, viewMode, minMagnitude, speed, density, selectedType, onAnalyze, isDark, countryStats]);
+  }, [worldData, countryLabels, rotation, scale, attacks, viewMode, minMagnitude, speed, density, selectedType, onAnalyze, isDark, countryStats, stars]);
 
   // Retry loading map data
-  const retryLoad = () => {
-    setIsLoading(true);
-    setLoadError(null);
-    
-    fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json')
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error(`Failed to load map data: ${response.status}`);
-        }
-        return response.json();
-      })
-      .then((data: WorldTopology) => {
-        // @ts-expect-error - topojson types are tricky with the client library
-        const features = feature(data, data.objects.countries);
-        setWorldData(features);
-        
-        const labels = (features as any).features
-            .map((f: any) => {
-                const name = COUNTRY_NAMES[f.id];
-                if (!name) return null;
-                return {
-                    id: f.id,
-                    name: name,
-                    centroid: d3.geoCentroid(f)
-                };
-            })
-            .filter((l: any) => l !== null);
-        setCountryLabels(labels);
-        setIsLoading(false);
-      })
-      .catch((error) => {
-        console.error('Failed to load world map data:', error);
-        setLoadError(error.message || 'Failed to load map data');
-        setIsLoading(false);
-      });
-  };
+  const retryLoad = () => loadMap();
 
   // Loading State
   if (isLoading) {

@@ -92,12 +92,22 @@ export const localDB = {
   },
 
   /**
-   * Get recent attacks (last N)
+   * Get the most recent N attacks, ordered oldest -> newest.
+   * This matches the in-memory order used by the app, which appends new
+   * attacks to the end of the list. Walks the timestamp index backwards
+   * with a cursor so only N records are read.
    */
   async getRecentAttacks(limit: number = 50): Promise<AttackEvent[]> {
     const db = await getDB();
-    const attacks = await db.getAllFromIndex(ATTACKS_STORE, 'by-timestamp');
-    return attacks.slice(-limit).reverse();
+    const tx = db.transaction(ATTACKS_STORE, 'readonly');
+    const recent: AttackEvent[] = [];
+    let cursor = await tx.store.index('by-timestamp').openCursor(null, 'prev');
+    while (cursor && recent.length < limit) {
+      recent.push(cursor.value);
+      cursor = await cursor.continue();
+    }
+    await tx.done;
+    return recent.reverse();
   },
 
   /**
@@ -138,18 +148,18 @@ export const localDB = {
   async pruneOldAttacks(): Promise<void> {
     const db = await getDB();
     const count = await db.count(ATTACKS_STORE);
+    if (count <= MAX_ATTACKS) return;
 
-    if (count > MAX_ATTACKS) {
-      const toDelete = count - MAX_ATTACKS;
-      const attacks = await db.getAllFromIndex(ATTACKS_STORE, 'by-timestamp');
-      const oldestIds = attacks.slice(0, toDelete).map(a => a.id);
-
-      const tx = db.transaction(ATTACKS_STORE, 'readwrite');
-      await Promise.all([
-        ...oldestIds.map(id => tx.store.delete(id)),
-        tx.done,
-      ]);
+    // Delete only the overflow, oldest first, without loading the whole store.
+    let toDelete = count - MAX_ATTACKS;
+    const tx = db.transaction(ATTACKS_STORE, 'readwrite');
+    let cursor = await tx.store.index('by-timestamp').openCursor();
+    while (cursor && toDelete > 0) {
+      await cursor.delete();
+      toDelete--;
+      cursor = await cursor.continue();
     }
+    await tx.done;
   },
 
   /**

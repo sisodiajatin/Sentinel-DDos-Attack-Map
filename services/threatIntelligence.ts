@@ -9,9 +9,8 @@
 import { AttackEvent, AttackType, GeoCoord } from '../types';
 import { MAJOR_CITIES } from '../constants';
 
-// API Configuration
-const ABUSEIPDB_API_KEY = process.env.ABUSEIPDB_API_KEY || '';
-const OTX_API_KEY = process.env.OTX_API_KEY || '';
+// NOTE: API keys must never be read here. This module runs in the browser.
+// All calls to AbuseIPDB / OTX / Gemini go through the /api/* serverless proxies.
 
 // Types for API responses
 export interface AbuseIPDBReport {
@@ -110,150 +109,6 @@ const COUNTRY_COORDS: Record<string, GeoCoord> = {
   TR: { lat: 41.0082, lng: 28.9784, city: 'Istanbul', country: 'Turkey' },
   MX: { lat: 19.4326, lng: -99.1332, city: 'Mexico City', country: 'Mexico' },
 };
-
-/**
- * Check IP reputation using AbuseIPDB
- */
-export async function checkIPReputation(ipAddress: string): Promise<AbuseIPDBReport | null> {
-  if (!ABUSEIPDB_API_KEY) {
-    console.warn('AbuseIPDB API key not configured');
-    return null;
-  }
-
-  try {
-    const response = await fetch(
-      `https://api.abuseipdb.com/api/v2/check?ipAddress=${encodeURIComponent(ipAddress)}&maxAgeInDays=90&verbose=true`,
-      {
-        method: 'GET',
-        headers: {
-          'Key': ABUSEIPDB_API_KEY,
-          'Accept': 'application/json',
-        },
-      }
-    );
-
-    if (!response.ok) {
-      if (response.status === 429) {
-        console.warn('AbuseIPDB rate limit exceeded');
-      }
-      throw new Error(`AbuseIPDB API error: ${response.status}`);
-    }
-
-    const data = await response.json();
-    return data.data as AbuseIPDBReport;
-  } catch (error) {
-    console.error('Failed to check IP reputation:', error);
-    return null;
-  }
-}
-
-/**
- * Get recently reported malicious IPs from AbuseIPDB
- * Note: Blacklist endpoint requires paid subscription, so we use check endpoint with known bad IPs
- */
-export async function getBlacklistedIPs(limit: number = 50): Promise<AbuseIPDBReport[]> {
-  if (!ABUSEIPDB_API_KEY) {
-    console.warn('AbuseIPDB API key not configured');
-    return [];
-  }
-
-  // Known malicious IPs for demonstration (these are commonly reported)
-  // In production, you'd fetch from a threat feed or use the paid blacklist API
-  const knownBadIPs = [
-    '185.220.101.1', '185.220.101.2', '185.220.101.3',
-    '45.155.205.233', '92.63.197.48', '178.128.23.9',
-    '139.59.1.41', '104.248.83.13', '165.232.168.65',
-    '206.189.85.18', '167.99.36.112', '128.199.10.23',
-    '64.225.80.131', '159.89.173.104', '188.166.230.148',
-    '167.172.43.16', '142.93.230.189', '68.183.207.73',
-    '157.245.141.196', '134.122.124.179'
-  ];
-
-  const reports: AbuseIPDBReport[] = [];
-  
-  // Check a subset of IPs to avoid rate limits
-  const ipsToCheck = knownBadIPs.slice(0, Math.min(limit, 5));
-  
-  for (const ip of ipsToCheck) {
-    try {
-      const report = await checkIPReputation(ip);
-      if (report && report.abuseConfidenceScore > 0) {
-        reports.push(report);
-      }
-      // Small delay to avoid rate limiting
-      await new Promise(resolve => setTimeout(resolve, 200));
-    } catch (error) {
-      console.warn(`Failed to check IP ${ip}:`, error);
-    }
-  }
-
-  return reports;
-}
-
-/**
- * Get recent threat pulses from AlienVault OTX
- */
-export async function getOTXPulses(limit: number = 10): Promise<OTXPulse[]> {
-  if (!OTX_API_KEY) {
-    console.warn('OTX API key not configured');
-    return [];
-  }
-
-  try {
-    const response = await fetch(
-      `https://otx.alienvault.com/api/v1/pulses/subscribed?limit=${limit}&page=1`,
-      {
-        method: 'GET',
-        headers: {
-          'X-OTX-API-KEY': OTX_API_KEY,
-          'Accept': 'application/json',
-        },
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error(`OTX API error: ${response.status}`);
-    }
-
-    const data = await response.json();
-    return data.results as OTXPulse[];
-  } catch (error) {
-    console.error('Failed to get OTX pulses:', error);
-    return [];
-  }
-}
-
-/**
- * Get recent threat indicators from OTX
- */
-export async function getOTXIndicators(type: 'IPv4' | 'domain' | 'URL' = 'IPv4'): Promise<OTXIndicator[]> {
-  if (!OTX_API_KEY) {
-    return [];
-  }
-
-  try {
-    const response = await fetch(
-      `https://otx.alienvault.com/api/v1/indicators/export?type=${type}`,
-      {
-        method: 'GET',
-        headers: {
-          'X-OTX-API-KEY': OTX_API_KEY,
-          'Accept': 'application/json',
-        },
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error(`OTX API error: ${response.status}`);
-    }
-
-    const data = await response.json();
-    return data as OTXIndicator[];
-  } catch (error) {
-    console.error('Failed to get OTX indicators:', error);
-    return [];
-  }
-}
 
 /**
  * Convert AbuseIPDB report to AttackEvent
@@ -393,30 +248,11 @@ export function generateRealThreatData(count: number = 20): AttackEvent[] {
 }
 
 /**
- * Fetch real threat data - uses local threat intelligence database
- * Note: Direct browser API calls to AbuseIPDB/OTX are blocked by CORS
- * For production, you'd use a backend proxy server
+ * Fetch threat data from the curated local threat-intel dataset.
+ * Live enrichment happens server-side via /api/threat/stream.
  */
 export async function fetchRealThreatData(): Promise<AttackEvent[]> {
-  // Generate attacks from our real threat intelligence database
-  const attacks = generateRealThreatData(25);
-  
-  // If AbuseIPDB is configured, try to enrich some data (may fail due to CORS)
-  if (ABUSEIPDB_API_KEY) {
-    try {
-      // Try one IP check to see if API works (will likely fail in browser due to CORS)
-      const testReport = await checkIPReputation('185.220.101.1');
-      if (testReport) {
-        console.log('AbuseIPDB API accessible - enriching data');
-        // API works - we could enrich data here
-      }
-    } catch (error) {
-      // Expected in browser - CORS blocks direct API calls
-      console.info('Using local threat intelligence (browser CORS prevents direct API access)');
-    }
-  }
-
-  return attacks;
+  return generateRealThreatData(25);
 }
 
 /**
@@ -449,19 +285,20 @@ export class ThreatIntelStream {
     // Initial fetch
     await this.fetchAndCache();
 
+    // stop() may have been called while we were awaiting; don't start a
+    // stray interval in that case.
+    if (!this.isRunning || this.intervalId !== null) return;
+
     // Stream cached attacks at intervals
     this.intervalId = window.setInterval(() => {
       if (this.cachedAttacks.length > 0) {
         const attack = this.cachedAttacks[this.cacheIndex % this.cachedAttacks.length];
         
-        // Vary the attack slightly to make it look more dynamic
-        const types = Object.values(AttackType);
         const updatedAttack: AttackEvent = {
           ...attack,
           id: `real-${Date.now()}-${this.cacheIndex}`,
           timestamp: Date.now(),
           magnitude: Math.min(10, Math.max(1, attack.magnitude + Math.floor(Math.random() * 3) - 1)),
-          type: Math.random() > 0.7 ? types[Math.floor(Math.random() * types.length)] : attack.type,
         };
         this.emit(updatedAttack);
         this.cacheIndex++;
@@ -513,18 +350,13 @@ export class ThreatIntelStream {
 export const threatIntelStream = new ThreatIntelStream();
 
 /**
- * Check if real threat intel APIs are configured
+ * Key availability is only known server-side; the client asks /api/threat/stream.
+ * These remain as safe fallbacks for when the API is unreachable.
  */
 export function isRealDataAvailable(): boolean {
-  return Boolean(ABUSEIPDB_API_KEY || OTX_API_KEY);
+  return false;
 }
 
-/**
- * Get configuration status for UI display
- */
 export function getAPIStatus(): { abuseipdb: boolean; otx: boolean } {
-  return {
-    abuseipdb: Boolean(ABUSEIPDB_API_KEY),
-    otx: Boolean(OTX_API_KEY),
-  };
+  return { abuseipdb: false, otx: false };
 }

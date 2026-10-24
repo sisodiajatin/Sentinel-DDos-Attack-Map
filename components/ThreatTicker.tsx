@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { fetchRealTimeThreatNews, NewsItem } from '../services/geminiService';
-import { Radio, ExternalLink, AlertOctagon } from 'lucide-react';
+import { ExternalLink, AlertOctagon } from 'lucide-react';
 
 const ThreatTicker: React.FC = () => {
   const [news, setNews] = useState<NewsItem | null>(null);
@@ -16,7 +16,7 @@ const ThreatTicker: React.FC = () => {
           setNews(data);
           setLoading(false);
         }
-      } catch (err) {
+      } catch {
         if (mounted) setLoading(false);
       }
     };
