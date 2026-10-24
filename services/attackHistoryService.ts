@@ -84,10 +84,13 @@ export const attackHistoryService = {
   async saveAttack(attack: AttackEvent): Promise<void> {
     const db = await getDB();
 
-    // Check entry count before saving
+    // Enforce the size cap. cleanup() only removes entries past the retention
+    // window, so under a high attack rate the store could still grow past
+    // MAX_ENTRIES; trim the oldest overflow explicitly in that case.
     const count = await db.count(HISTORY_STORE);
     if (count >= MAX_ENTRIES) {
       await this.cleanup();
+      await this.trimToMax();
     }
 
     await db.put(HISTORY_STORE, {
@@ -212,6 +215,26 @@ export const attackHistoryService = {
     ]);
 
     return oldEntries.length;
+  },
+
+  /**
+   * Remove the oldest entries so the store holds fewer than MAX_ENTRIES.
+   */
+  async trimToMax(): Promise<number> {
+    const db = await getDB();
+    let overflow = (await db.count(HISTORY_STORE)) - MAX_ENTRIES + 1;
+    if (overflow <= 0) return 0;
+    let removed = 0;
+    const tx = db.transaction(HISTORY_STORE, 'readwrite');
+    let cursor = await tx.store.index('by-timestamp').openCursor();
+    while (cursor && overflow > 0) {
+      await cursor.delete();
+      overflow--;
+      removed++;
+      cursor = await cursor.continue();
+    }
+    await tx.done;
+    return removed;
   },
 
   /**
