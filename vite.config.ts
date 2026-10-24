@@ -1,25 +1,32 @@
 import path from 'path';
-import { defineConfig, loadEnv } from 'vite';
+import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-export default defineConfig(({ mode }) => {
-    const env = loadEnv(mode, '.', '');
-    return {
-      server: {
-        port: 3000,
-        host: '0.0.0.0',
+// Secrets (GEMINI/ABUSEIPDB/OTX keys) are read only by the /api serverless
+// functions via process.env. Never inject them with `define` here, because
+// anything in `define` is inlined into the public browser bundle.
+export default defineConfig({
+  server: {
+    port: 3000,
+    host: '0.0.0.0',
+  },
+  plugins: [react()],
+  define: {
+    'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production'),
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          d3: ['d3', 'topojson-client'],
+          charts: ['recharts'],
+        },
       },
-      plugins: [react()],
-      define: {
-        'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-        'process.env.ABUSEIPDB_API_KEY': JSON.stringify(env.ABUSEIPDB_API_KEY),
-        'process.env.OTX_API_KEY': JSON.stringify(env.OTX_API_KEY),
-      },
-      resolve: {
-        alias: {
-          '@': path.resolve(__dirname, '.'),
-        }
-      }
-    };
+    },
+  },
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, '.'),
+    },
+  },
 });
