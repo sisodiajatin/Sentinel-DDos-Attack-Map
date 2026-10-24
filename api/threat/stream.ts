@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { clampInt, rateLimit } from '../_lib/http.js';
 
 const ABUSEIPDB_API_KEY = process.env.ABUSEIPDB_API_KEY || '';
 const OTX_API_KEY = process.env.OTX_API_KEY || '';
@@ -57,8 +58,29 @@ interface AttackEvent {
   ip: string;
 }
 
+export const MAX_STREAM_COUNT = 100;
+const ABUSE_CACHE_TTL_MS = 10 * 60 * 1000;
+
+// Cache the AbuseIPDB lookup per instance so we don't spend one quota call
+// (free tier: 1,000/day) on every stream request.
+let abuseCache: { at: number; data: AttackEvent[] } | null = null;
+
+export function _resetAbuseCache(): void {
+  abuseCache = null;
+}
+
 async function fetchAbuseIPDBData(): Promise<AttackEvent[]> {
   if (!ABUSEIPDB_API_KEY) return [];
+  if (abuseCache && Date.now() - abuseCache.at < ABUSE_CACHE_TTL_MS) {
+    // Re-stamp cached events so they look current but keep stable data.
+    return abuseCache.data.map((a) => ({ ...a, id: `${a.id}-${Date.now()}`, timestamp: Date.now() }));
+  }
+  const result = await fetchAbuseIPDBUncached();
+  abuseCache = { at: Date.now(), data: result };
+  return result;
+}
+
+async function fetchAbuseIPDBUncached(): Promise<AttackEvent[]> {
 
   try {
     // Check a known bad IP to get real data
@@ -125,7 +147,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const count = parseInt(req.query.count as string) || 10;
+  if (!rateLimit(req, res, 'stream', 60, 60_000)) return;
+
+  const count = clampInt(req.query.count, 10, 1, MAX_STREAM_COUNT);
   const attacks: AttackEvent[] = [];
 
   // Try to get real data from AbuseIPDB

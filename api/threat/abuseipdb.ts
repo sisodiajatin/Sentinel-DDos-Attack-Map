@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { isValidIp, queryString, rateLimit } from '../_lib/http.js';
 
 const ABUSEIPDB_API_KEY = process.env.ABUSEIPDB_API_KEY || '';
 
@@ -8,10 +9,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { ip } = req.query;
+  if (!rateLimit(req, res, 'abuseipdb', 20, 60_000)) return;
 
-  if (!ip || typeof ip !== 'string') {
-    return res.status(400).json({ error: 'IP address required' });
+  const ip = queryString(req.query.ip)?.trim();
+
+  if (!ip || !isValidIp(ip)) {
+    return res.status(400).json({ error: 'A valid IPv4 or IPv6 address is required' });
   }
 
   if (!ABUSEIPDB_API_KEY) {
