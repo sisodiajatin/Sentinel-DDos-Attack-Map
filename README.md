@@ -80,7 +80,7 @@ A sophisticated real-time cybersecurity threat visualization platform that maps 
 - Node.js 18+
 - npm or yarn
 - API keys (optional for live data):
-  - [Google Gemini API Key](https://makersuite.google.com/app/apikey)
+  - [Google Gemini API Key](https://aistudio.google.com/app/apikey)
   - [AbuseIPDB API Key](https://www.abuseipdb.com/api)
   - [AlienVault OTX API Key](https://otx.alienvault.com/api)
 
@@ -99,7 +99,10 @@ A sophisticated real-time cybersecurity threat visualization platform that maps 
 
 3. **Configure environment variables**
 
-   Create a `.env` file in the root directory:
+   Copy the example file, then add your keys to `.env`:
+   ```bash
+   cp .env.example .env
+   ```
    ```env
    # Required for AI-powered threat analysis
    GEMINI_API_KEY=your_gemini_api_key_here
@@ -108,15 +111,25 @@ A sophisticated real-time cybersecurity threat visualization platform that maps 
    ABUSEIPDB_API_KEY=your_abuseipdb_key_here
    OTX_API_KEY=your_otx_key_here
    ```
+   These keys are read only by the `/api` functions, never by the browser. `.env` is gitignored, so keep real keys there and not in `.env.example`.
 
-4. **Run the development server**
+4. **Run the app**
+
+   Full app, including the `/api` functions for AI analysis and live threat data:
+   ```bash
+   npx vercel dev
+   ```
+   The first run asks you to log in to Vercel and link a project.
+
+   Frontend only, with simulated attack data and no keys needed:
    ```bash
    npm run dev
    ```
+   `npm run dev` runs Vite alone, so it doesn't execute the `/api` functions or use your `.env` keys.
 
 5. **Open your browser**
 
-   Navigate to `http://localhost:5173`
+   Navigate to `http://localhost:3000`
 
 ---
 
@@ -211,7 +224,7 @@ sentinel-ddos-attack-map/
 ## Scripts
 
 ```bash
-npm run dev          # Start development server
+npm run dev          # Start Vite dev server (frontend only, no /api functions)
 npm run build        # Build for production
 npm run preview      # Preview production build
 npm run lint         # Run ESLint
